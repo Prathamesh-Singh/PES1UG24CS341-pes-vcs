@@ -166,5 +166,76 @@ static int write_tree_level(IndexEntry **entries, int count, int depth, ObjectID
         char *slash = strchr(p, '/');
  
         if (!slash) {
-            
+            if (tree.count >= MAX_TREE_ENTRIES) return -1;
+            TreeEntry *e = &tree.entries[tree.count++];
+            e->mode = entries[i]->mode;
+            snprintf(e->name, sizeof(e->name), "%s", p);
+            e->hash = entries[i]->hash;
+            i++;
+        } else {
+            // ── Subdirectory — collect all entries sharing this prefix ──────
+            size_t dir_len = (size_t)(slash - p);
+            char dir_name[256];
+            if (dir_len >= sizeof(dir_name)) return -1;
+            memcpy(dir_name, p, dir_len);
+            dir_name[dir_len] = '\0';
+ 
+            // Find range [i, j) belonging to this subdirectory
+            int j = i;
+            while (j < count) {
+                char *pp = entries[j]->path;
+                for (int d = 0; d < depth; d++) {
+                    char *sl = strchr(pp, '/');
+                    if (!sl) { pp = NULL; break; }
+                    pp = sl + 1;
+                }
+                if (!pp) break;
+                if (strncmp(pp, dir_name, dir_len) != 0 || pp[dir_len] != '/') break;
+                j++;
+            }
+ 
+            // Recurse for entries[i..j-1] one level deeper
+            ObjectID sub_id;
+            if (write_tree_level(entries + i, j - i, depth + 1, &sub_id) != 0)
+                return -1;
+ 
+            if (tree.count >= MAX_TREE_ENTRIES) return -1;
+            TreeEntry *e = &tree.entries[tree.count++];
+            e->mode = MODE_DIR;
+            snprintf(e->name, sizeof(e->name), "%s", dir_name);
+            e->hash = sub_id;
+            i = j;
         }
+    }
+ 
+    // Serialize this level and write as a tree object
+    void   *tdata;
+    size_t  tlen;
+    if (tree_serialize(&tree, &tdata, &tlen) != 0) return -1;
+    int ret = object_write(OBJ_TREE, tdata, tlen, id_out);
+    free(tdata);
+    return ret;
+}
+ 
+int tree_from_index(ObjectID *id_out) {
+    // Heap-allocate to avoid stack overflow (Index can be several MB)
+    Index *idx = malloc(sizeof(Index));
+    if (!idx) return -1;
+ 
+    if (tree_load_index_inline(idx) != 0) { free(idx); return -1; }
+    if (idx->count == 0) {
+        fprintf(stderr, "error: nothing staged — run 'pes add' first\n");
+        free(idx);
+        return -1;
+    }
+ 
+    // Build sorted pointer array for deterministic tree
+    IndexEntry *ptrs[MAX_INDEX_ENTRIES];
+    for (int i = 0; i < idx->count; i++) ptrs[i] = &idx->entries[i];
+    qsort(ptrs, (size_t)idx->count, sizeof(IndexEntry *), cmp_entry_ptr);
+ 
+    int ret = write_tree_level(ptrs, idx->count, 0, id_out);
+    free(idx);
+    return ret;
+
+}
