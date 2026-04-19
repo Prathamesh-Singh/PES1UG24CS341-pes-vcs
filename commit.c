@@ -175,3 +175,41 @@ int head_update(const ObjectID *new_commit) {
  
     return rename(tmp_path, target_path);
 }
+// ─── TODO ────────────────────────────────────────────────────────────────────
+ 
+
+int commit_create(const char *message, ObjectID *commit_id_out) {
+    // Step 1: Build a tree object from the current index
+    ObjectID tree_id;
+    if (tree_from_index(&tree_id) != 0) {
+        fprintf(stderr, "error: nothing to commit (index is empty)\n");
+        return -1;
+    }
+ 
+    // Step 2: Read current HEAD as parent (fails gracefully for first commit)
+    ObjectID parent_id;
+    int has_parent = (head_read(&parent_id) == 0);
+ 
+    // Step 3: Fill the Commit struct
+    Commit c;
+    memset(&c, 0, sizeof(c));
+    c.tree       = tree_id;
+    c.has_parent = has_parent;
+    if (has_parent) c.parent = parent_id;
+    c.timestamp  = (uint64_t)time(NULL);
+    strncpy(c.author,  pes_author(), sizeof(c.author)  - 1);
+    strncpy(c.message, message,      sizeof(c.message) - 1);
+ 
+    // Step 4: Serialize commit struct to text buffer
+    void  *raw;
+    size_t raw_len;
+    if (commit_serialize(&c, &raw, &raw_len) != 0) return -1;
+ 
+    // Step 5: Write commit object to the object store
+    int ret = object_write(OBJ_COMMIT, raw, raw_len, commit_id_out);
+    free(raw);
+    if (ret != 0) return -1;
+ 
+    // Step 6: Update HEAD (or the branch it points to) to new commit
+    return head_update(commit_id_out);
+}
