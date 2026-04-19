@@ -123,3 +123,55 @@ int commit_walk(commit_walk_fn callback, void *ctx) {
     }
     return 0;
 }
+
+int head_read(ObjectID *id_out) {
+    FILE *f = fopen(HEAD_FILE, "r");
+    if (!f) return -1;
+    char line[512];
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
+    fclose(f);
+    line[strcspn(line, "\r\n")] = '\0';
+ 
+    // HEAD contains "ref: refs/heads/main" → follow to the branch file
+    if (strncmp(line, "ref: ", 5) == 0) {
+        char ref_path[512];
+        snprintf(ref_path, sizeof(ref_path), "%s/%s", PES_DIR, line + 5);
+        f = fopen(ref_path, "r");
+        if (!f) return -1; // Branch has no commits yet
+        if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
+        fclose(f);
+        line[strcspn(line, "\r\n")] = '\0';
+    }
+    // line now holds the commit hash hex string
+    return hex_to_hash(line, id_out);
+}
+ 
+int head_update(const ObjectID *new_commit) {
+    // Read HEAD to find which file to update
+    FILE *f = fopen(HEAD_FILE, "r");
+    if (!f) return -1;
+    char line[512];
+    if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
+    fclose(f);
+    line[strcspn(line, "\r\n")] = '\0';
+ 
+    char target_path[520];
+    if (strncmp(line, "ref: ", 5) == 0)
+        snprintf(target_path, sizeof(target_path), "%s/%s", PES_DIR, line + 5);
+    else
+        snprintf(target_path, sizeof(target_path), "%s", HEAD_FILE); // detached HEAD
+ 
+    // Write new hash to temp file, then atomically rename
+    char tmp_path[528];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", target_path);
+    f = fopen(tmp_path, "w");
+    if (!f) return -1;
+    char hex[HASH_HEX_SIZE + 1];
+    hash_to_hex(new_commit, hex);
+    fprintf(f, "%s\n", hex);
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+ 
+    return rename(tmp_path, target_path);
+}
