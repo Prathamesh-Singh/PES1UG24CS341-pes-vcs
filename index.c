@@ -52,3 +52,68 @@ int index_remove(Index *index, const char *path) {
     return -1;
 }
 
+
+int index_status(const Index *index) {
+    // ── Staged: everything currently in the index ──────────────────────────
+    printf("Staged changes:\n");
+    int staged_count = 0;
+    for (int i = 0; i < index->count; i++) {
+        printf("  staged:     %s\n", index->entries[i].path);
+        staged_count++;
+    }
+    if (staged_count == 0) printf("  (nothing to show)\n");
+    printf("\n");
+ 
+    // ── Unstaged: index entries whose file has changed since pes add ────────
+    printf("Unstaged changes:\n");
+    int unstaged_count = 0;
+    for (int i = 0; i < index->count; i++) {
+        struct stat st;
+        if (stat(index->entries[i].path, &st) != 0) {
+            // File was deleted from working directory
+            printf("  deleted:    %s\n", index->entries[i].path);
+            unstaged_count++;
+        } else {
+            // Fast diff using mtime + size metadata (avoids re-hashing)
+            if (st.st_mtime != (time_t)index->entries[i].mtime_sec ||
+                st.st_size  != (off_t)index->entries[i].size) {
+                printf("  modified:   %s\n", index->entries[i].path);
+                unstaged_count++;
+            }
+        }
+    }
+    if (unstaged_count == 0) printf("  (nothing to show)\n");
+    printf("\n");
+ 
+    // ── Untracked: files in working dir not in the index ────────────────────
+    printf("Untracked files:\n");
+    int untracked_count = 0;
+    DIR *dir = opendir(".");
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+            if (strcmp(ent->d_name, ".pes") == 0) continue;
+            if (strcmp(ent->d_name, "pes") == 0)  continue;
+            if (strstr(ent->d_name, ".o") != NULL) continue;
+            int is_tracked = 0;
+            for (int i = 0; i < index->count; i++) {
+                if (strcmp(index->entries[i].path, ent->d_name) == 0) {
+                    is_tracked = 1; break;
+                }
+            }
+            if (!is_tracked) {
+                struct stat st;
+                stat(ent->d_name, &st);
+                if (S_ISREG(st.st_mode)) {
+                    printf("  untracked:  %s\n", ent->d_name);
+                    untracked_count++;
+                }
+            }
+        }
+        closedir(dir);
+    }
+    if (untracked_count == 0) printf("  (nothing to show)\n");
+    printf("\n");
+    return 0;
+}
