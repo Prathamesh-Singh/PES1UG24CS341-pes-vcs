@@ -117,3 +117,36 @@ int index_status(const Index *index) {
     printf("\n");
     return 0;
 }
+int index_load(Index *index) {
+    index->count = 0;
+    FILE *f = fopen(INDEX_FILE, "r");
+    if (!f) return 0; // No index file yet — empty index is not an error
+ 
+    char line[1024];
+    while (fgets(line, sizeof(line), f) && index->count < MAX_INDEX_ENTRIES) {
+        line[strcspn(line, "\n")] = '\0';
+        if (strlen(line) == 0) continue;
+ 
+        IndexEntry *e = &index->entries[index->count];
+        char hex[HASH_HEX_SIZE + 1];
+        unsigned int mode;
+        unsigned long long mtime_sec;
+        unsigned int size;
+        char path[512];
+ 
+        if (sscanf(line, "%o %64s %llu %u %511s",
+                   &mode, hex, &mtime_sec, &size, path) != 5)
+            continue;
+ 
+        e->mode      = (uint32_t)mode;
+        e->mtime_sec = (uint64_t)mtime_sec;
+        e->size      = (uint32_t)size;
+        memcpy(e->path, path, sizeof(e->path));
+        e->path[sizeof(e->path) - 1] = '\0';
+ 
+        if (hex_to_hash(hex, &e->hash) != 0) continue;
+        index->count++;
+    }
+    fclose(f);
+    return 0;
+}
