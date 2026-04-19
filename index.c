@@ -117,6 +117,7 @@ int index_status(const Index *index) {
     printf("\n");
     return 0;
 }
+// ─── TODO ────────────────────────────────────────────────────────────────────
 int index_load(Index *index) {
     index->count = 0;
     FILE *f = fopen(INDEX_FILE, "r");
@@ -190,4 +191,47 @@ int index_save(const Index *index) {
     // Atomic replace — rename is POSIX-guaranteed atomic
     if (rename(tmp_path, INDEX_FILE) != 0) { unlink(tmp_path); return -1; }
     return 0;
+}
+
+int index_add(Index *index, const char *path) {
+    // Step 1: Read the file contents into memory
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "error: cannot open '%s'\n", path); return -1; }
+    fseek(f, 0, SEEK_END);
+    long file_len = ftell(f);
+    rewind(f);
+    if (file_len < 0) { fclose(f); return -1; }
+    size_t size = (size_t)file_len;
+ 
+    void *data = malloc(size == 0 ? 1 : size); // malloc(0) is undefined
+    if (!data) { fclose(f); return -1; }
+    if (size > 0 && fread(data, 1, size, f) != size) {
+        free(data); fclose(f); return -1;
+    }
+    fclose(f);
+ 
+    // Step 2: Write file contents as a blob object to the store
+    ObjectID id;
+    if (object_write(OBJ_BLOB, data, size, &id) != 0) { free(data); return -1; }
+    free(data);
+ 
+    // Step 3: Get file metadata for fast-diff in index_status
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+ 
+    // Step 4: Update existing entry or create new one
+    IndexEntry *e = index_find(index, path);
+    if (!e) {
+        if (index->count >= MAX_INDEX_ENTRIES) return -1;
+        e = &index->entries[index->count++];
+    }
+    e->hash      = id;
+    e->mode      = (st.st_mode & S_IXUSR) ? 0100755 : 0100644;
+    e->mtime_sec = (uint64_t)st.st_mtime;
+    e->size      = (uint32_t)size;
+    strncpy(e->path, path, sizeof(e->path) - 1);
+    e->path[sizeof(e->path) - 1] = '\0';
+ 
+    // Step 5: Persist the updated index atomically
+    return index_save(index);
 }
