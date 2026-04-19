@@ -99,3 +99,27 @@ int commit_serialize(const Commit *commit, void **data_out, size_t *len_out) {
     *len_out = (size_t)n;
     return 0;
 }
+int commit_walk(commit_walk_fn callback, void *ctx) {
+    ObjectID id;
+    if (head_read(&id) != 0) return -1; // No commits yet
+ 
+    while (1) {
+        ObjectType type;
+        void *raw;
+        size_t raw_len;
+        if (object_read(&id, &type, &raw, &raw_len) != 0) return -1;
+ 
+        Commit c;
+        int rc = commit_parse(raw, raw_len, &c);
+        free(raw);
+        if (rc != 0) return -1;
+ 
+        // Fire the callback (e.g. print the commit in pes log)
+        callback(&id, &c, ctx);
+ 
+        // Follow the parent pointer — stop at root commit
+        if (!c.has_parent) break;
+        id = c.parent;
+    }
+    return 0;
+}
