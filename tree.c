@@ -107,3 +107,39 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
     *len_out  = offset;
     return 0;
 }
+// ─── TODO ────────────────────────────────────────────────────────────────────
+ 
+static int tree_load_index_inline(Index *idx) {
+    idx->count = 0;
+    FILE *f = fopen(INDEX_FILE, "r");
+    if (!f) return 0; // No index yet — empty is not an error
+ 
+    char line[1024];
+    while (fgets(line, sizeof(line), f) && idx->count < MAX_INDEX_ENTRIES) {
+        line[strcspn(line, "\n")] = '\0';
+        if (line[0] == '\0') continue;
+ 
+        IndexEntry *e = &idx->entries[idx->count];
+        char hex[HASH_HEX_SIZE + 1];
+        unsigned int mode;
+        unsigned long long mtime_sec;
+        unsigned int size;
+        char path[512];
+ 
+        // Format: <mode> <hex> <mtime_sec> <size> <path>
+        if (sscanf(line, "%o %64s %llu %u %511s",
+                   &mode, hex, &mtime_sec, &size, path) != 5)
+            continue;
+ 
+        e->mode      = (uint32_t)mode;
+        e->mtime_sec = (uint64_t)mtime_sec;
+        e->size      = (uint32_t)size;
+        memcpy(e->path, path, sizeof(e->path));
+        e->path[sizeof(e->path) - 1] = '\0';
+ 
+        if (hex_to_hash(hex, &e->hash) != 0) continue;
+        idx->count++;
+    }
+    fclose(f);
+    return 0;
+}
