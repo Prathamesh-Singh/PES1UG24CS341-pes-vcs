@@ -77,3 +77,33 @@ int tree_parse(const void *data, size_t len, Tree *tree_out) {
     }
     return 0;
 }
+static int compare_tree_entries(const void *a, const void *b) {
+    return strcmp(((const TreeEntry *)a)->name, ((const TreeEntry *)b)->name);
+}
+ 
+int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
+    // Max size per entry: 6 (mode) + 1 (space) + 255 (name) + 1 (null) + 32 (hash)
+    size_t max_size = (size_t)tree->count * 296;
+    uint8_t *buffer = malloc(max_size);
+    if (!buffer) return -1;
+ 
+    // Sort entries by name — ensures identical trees always hash identically
+    Tree sorted_tree = *tree;
+    qsort(sorted_tree.entries, (size_t)sorted_tree.count,
+          sizeof(TreeEntry), compare_tree_entries);
+ 
+    size_t offset = 0;
+    for (int i = 0; i < sorted_tree.count; i++) {
+        const TreeEntry *entry = &sorted_tree.entries[i];
+        // Write "<mode-octal> <name>\0"
+        int written = sprintf((char *)buffer + offset, "%o %s", entry->mode, entry->name);
+        offset += (size_t)written + 1; // +1 for null terminator sprintf writes
+        // Write raw 32-byte hash
+        memcpy(buffer + offset, entry->hash.hash, HASH_SIZE);
+        offset += HASH_SIZE;
+    }
+ 
+    *data_out = buffer;
+    *len_out  = offset;
+    return 0;
+}
