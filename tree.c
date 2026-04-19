@@ -143,3 +143,28 @@ static int tree_load_index_inline(Index *idx) {
     fclose(f);
     return 0;
 }
+static int cmp_entry_ptr(const void *a, const void *b) {
+    const IndexEntry *ea = *(const IndexEntry **)a;
+    const IndexEntry *eb = *(const IndexEntry **)b;
+    return strcmp(ea->path, eb->path);
+}
+ 
+static int write_tree_level(IndexEntry **entries, int count, int depth, ObjectID *id_out) {
+    Tree tree;
+    tree.count = 0;
+ 
+    int i = 0;
+    while (i < count) {
+        // Walk path to the component at the current depth level
+        char *p = entries[i]->path;
+        for (int d = 0; d < depth; d++) {
+            char *sl = strchr(p, '/');
+            if (!sl) return -1;
+            p = sl + 1;
+        }
+ 
+        char *slash = strchr(p, '/');
+ 
+        if (!slash) {
+            
+        }
