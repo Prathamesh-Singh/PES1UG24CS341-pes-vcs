@@ -150,3 +150,44 @@ int index_load(Index *index) {
     fclose(f);
     return 0;
 }
+static int cmp_index_entry(const void *a, const void *b) {
+    return strcmp(((const IndexEntry *)a)->path,
+                  ((const IndexEntry *)b)->path);
+}
+ 
+int index_save(const Index *index) {
+    // Heap-allocate sorted copy — Index struct can be several MB,
+    // putting it on the stack would cause a stack overflow (SIGSEGV)
+    Index *sorted = malloc(sizeof(Index));
+    if (!sorted) return -1;
+    memcpy(sorted, index, sizeof(Index));
+    qsort(sorted->entries, (size_t)sorted->count,
+          sizeof(IndexEntry), cmp_index_entry);
+ 
+    // Write to temp file first (never corrupt the real index)
+    char tmp_path[64];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", INDEX_FILE);
+    FILE *f = fopen(tmp_path, "w");
+    if (!f) { free(sorted); return -1; }
+ 
+    char hex[HASH_HEX_SIZE + 1];
+    for (int i = 0; i < sorted->count; i++) {
+        const IndexEntry *e = &sorted->entries[i];
+        hash_to_hex(&e->hash, hex);
+        fprintf(f, "%o %s %llu %u %s\n",
+                e->mode, hex,
+                (unsigned long long)e->mtime_sec,
+                (unsigned int)e->size,
+                e->path);
+    }
+ 
+    // Flush + fsync before rename to guarantee data on disk
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+    free(sorted);
+ 
+    // Atomic replace — rename is POSIX-guaranteed atomic
+    if (rename(tmp_path, INDEX_FILE) != 0) { unlink(tmp_path); return -1; }
+    return 0;
+}
