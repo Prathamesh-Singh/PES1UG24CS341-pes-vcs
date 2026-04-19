@@ -45,7 +45,7 @@ void compute_hash(const void *data, size_t len, ObjectID *id_out) {
     EVP_MD_CTX_free(ctx);
 }
 
-//Step 3
+
 void object_path(const ObjectID *id, char *path_out, size_t path_size) {
     char hex[HASH_HEX_SIZE + 1];
     hash_to_hex(id, hex);
@@ -56,3 +56,61 @@ int object_exists(const ObjectID *id) {
     char path[512];
     object_path(id, path, sizeof(path));
     return access(path, F_OK) == 0;
+}
+// ─── TODO ────────────────────────────────────────────────────────────────────
+ 
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
+    // Step 1: Build header string e.g. "blob 42\0"
+    const char *type_str = (type == OBJ_BLOB)   ? "blob"   :
+                           (type == OBJ_TREE)   ? "tree"   : "commit";
+    char header[64];
+    int hlen = snprintf(header, sizeof(header), "%s %zu", type_str, len) + 1;
+ 
+    // Step 2: Concatenate header + data into one buffer
+    size_t total = (size_t)hlen + len;
+    uint8_t *full = malloc(total);
+    if (!full) return -1;
+    memcpy(full, header, (size_t)hlen);
+    memcpy(full + hlen, data, len);
+ 
+    // Step 3: Compute SHA-256 of the FULL object (header + data)
+    compute_hash(full, total, id_out);
+ 
+    // Step 4: Deduplication — if already stored, skip writing
+    if (object_exists(id_out)) { free(full); return 0; }
+ 
+    // Step 5: Create shard directory (.pes/objects/XX/)
+    char hex[HASH_HEX_SIZE + 1];
+    hash_to_hex(id_out, hex);
+    char dir[256];
+    snprintf(dir, sizeof(dir), "%s/%.2s", OBJECTS_DIR, hex);
+    mkdir(dir, 0755);
+ 
+    // Step 6: Build final object path
+    char path[300];
+    object_path(id_out, path, sizeof(path));
+ 
+    // Step 7: Write to a temp file using mkstemp (safe unique name)
+    char tmp_path[316];
+    snprintf(tmp_path, sizeof(tmp_path), "%s/%.2s/tmp_XXXXXX", OBJECTS_DIR, hex);
+    int fd = mkstemp(tmp_path);
+    if (fd < 0) { free(full); return -1; }
+    ssize_t written = write(fd, full, total);
+    if (written < 0 || (size_t)written != total) {
+        close(fd); unlink(tmp_path); free(full); return -1;
+    }
+ 
+    // Step 8: fsync temp file to ensure data hits disk
+    fsync(fd);
+    close(fd);
+    free(full);
+ 
+    // Step 9: Atomic rename — on POSIX this is guaranteed atomic
+    if (rename(tmp_path, path) != 0) { unlink(tmp_path); return -1; }
+ 
+    // Step 10: fsync the shard directory to persist the rename
+    int dfd = open(dir, O_RDONLY);
+    if (dfd >= 0) { fsync(dfd); close(dfd); }
+ 
+    return 0;
+}
